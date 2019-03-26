@@ -1,0 +1,381 @@
+Initializing Struct Values
+With a Focus on Nice Package APIs
+26 Mar 2019
+
+Lars Walen
+Backend Developer at Subsplash
+Gopher Slack: @lars
+
+: First of all, thank you iStreamPlanet for hosting this and for the food.
+: And thank you all for coming.
+: My name is Lars, and I'm a backend developer at Subsplash where I design and build microservices in Go.
+: Subsplash is a platform used by thousands of churches and ministries to engage their audience. Content delivery and donation processing are two of the main areas we work in.
+: And, we have an open position for a Senior Site Reliability Engineer.
+
+* My credentials
+- Using Go since 1.6
+- Designed standard microservice project layout at Subsplash
+- Built lots of internal libraries and tools
+
+: So what are my credentials? This topic doesn't require any, but my first exposure to Go was in a programming languages class in college. Go might have been in version 1.1 at the time. I attended a meetup in Denver and gave a five minute presentation on the language to my class.
+: After a few years I got back into it when we started migrating to Go at Subsplash. I didn't like it very much back then, and would have preferred Ruby. But now I'm glad it wasn't my decision.
+: In the past few years I've designed our standard microservice project layout, built some libraries that are imported by all our projects, and built many tools for developer productivity. I'm still learning from all the mistakes I made in those things.
+
+* What is the purpose of this talk?
+To show how package APIs can benefit from certain struct-type initialization strategies.
+
+: I'll start with the purpose of this talk.
+: The purpose is to give an overview of some options for initializing struct-type values with the end goal of showing how to write packages with nice APIs, at least when it comes to initialization.
+
+* What is a nice initialization API?
+- Clear about requirements
+- Hard to make mistakes
+- Upfront about errors
+
+: That raises the question, what is a nice initialization API?
+: A nice API is clear about which of a struct type's fields are required and which aren't.
+: A nice API makes it hard to make mistakes.
+: And a nice API gives you errors before you run the program. So, we'll advantage of Go's type system to produce compile-time, rather than runtime errors.
+
+* Different needs
+- No fields
+- All fields optional
+- All fields required
+- Mix of optional and required fields
+
+: As you would expect, there could be different needs when initializing a value.
+: At the simplest end, your type might not have any fields. Or all the fields it has could be optional, or all required, or a combination of the two.
+: In this talk, "required" fields are necessary for the value to work. These could be things like a required field in a resource, or a pointer to a SQL database for a type that makes queries.
+: An optional field could be a logger where we send informational messages - it's not necessary for the value to work, but it might make your package easier to use and understand.
+
+* No fields or all fields optional
+
+: First we'll look at the simplest cases; when you don't have any fields or they are all optional.
+
+* No fields or all fields optional
+Given a simple `Book` type consisting of optional fields:
+
+    type Book struct {
+        Title   string
+        Content string
+    }
+
+Let users initialize however they want:
+
+    var b Book
+
+    b := Book{}
+
+    b := &Book{}
+
+: In this case, defining an exposed struct type with exposed fields is ideal.
+: It's simple, and let's the user initialize the value however they want.
+: For example, we could have a Book type with an optional title and content.
+
+* No fields or all fields optional
+Include New function if helpful for user:
+
+    func NewBook(title, content string) *Book {
+        return &Book{
+            Title:   title,
+            Content: content,
+        }
+    }
+
+- Commonly used arguments
+- Can provide hints about which fields are important
+
+: But we could also provide a New function that takes some commonly-used fields as arguments, and returns a pointer to a Book.
+: This can be nice for hinting at which fields are more important than others, and to make the most popular usecases more succinct.
+
+* All fields required
+
+: Now for a more complicated case, where all the type's fields must be specified for a value to do what it is supposed to do.
+
+* All fields required
+Given the same `Book` type, but assume a title and content are required.
+
+    func (b *Book) Shelve() error {
+        if b.Title == "" || b.Content == "" {
+            return errors.New("cannot shelve book without title and content")
+        }
+        // actually shelve it
+        return nil
+    }
+
+: We'll keep the Book type, but add a Shelve method that depends on the title and content fields.
+: In this example we return an error if either one isn't specified, but you can imagine a method panicking if the value wasn't initialized properly.
+
+* Method that panics if value wasn't initialized properly
+
+    enc := &json.Encoder{}
+
+    enc.Encode(map[string]string{"foo": "bar"}) // Panics
+
+ 
+
+    enc := json.NewEncoder(os.Stdout)
+
+    enc.Encode(map[string]string{"foo": "bar"}) // Works
+
+: There's an example of this in the standard library's json package - you can't just create a pointer to an encoder and start passing values; you need to use NewEncoder so you can specify where the output will be written.
+
+* All fields required
+Could use the previously shown convenience function:
+
+    func NewBook(title, content string) *Book {
+        return &Book{
+            Title:   title,
+            Content: content,
+        }
+    }
+
+: Moving along, if all our types fields are required, we could include a New function like the one shown earlier.
+: This is what the json package does; it provides the NewEncoder function, which takes an io.Writer and returns a pointer to an Encoder.
+: Here we have something similar, a function that takes a title and content, and returns a pointer to a Book.
+
+* All fields required
+But nothing stops the user from initializing a different way
+
+    b := &Book{}
+
+    err := b.Shelve()
+    if err != nil {
+        fmt.Println(err)
+    }
+
+ 
+
+    Output: cannot shelve book without title and content
+
+: But the user doesn't have to use this NewBook function; they can still create a new book with a composite literal.
+: There's potential here for the user to misconfigure a Book and run into issues when they try to shelve it. It wouldn't be the end of the world, but it makes our package's API less nice.
+
+* All fields required
+What can we do about that?
+
+- Put something in the documentation
+- Don't expose the required fields
+- Don't expose the type
+
+: So what can we do to either help or force the user to use the NewBook function. Here are a few simple options:
+: We could add a note in the documentation, telling the user to use the NewBook function.
+: We could make the required fields unexported.
+: Or we could make the type unexported.
+
+* Put something in the documentation
+
+    // Book is a book. Use NewBook to create an initialized book.
+    type Book struct {
+        Title   string
+        Content string
+    }
+
+.image init-struct-values/book_public_fields.png _ 1000
+
+: If adding a comment can keep us from writing weird code, it's a good solution.
+: If we add "Use NewBook to create an initialized book" in the comment above the type declaration, it will appear in Godoc, and possibly in your text editor. In VSCode, when I directly declare a Book value, I see a popover containing that message and the type definition.
+
+* Don't expose the required fields
+
+    type Book struct {
+        title   string
+        content string
+    }
+
+.image init-struct-values/book_private_fields.png _ 1000
+
+: A complementary solution can be to make the required fields private.
+: The comment that Godoc inserts is a decent hint that creating a Book value straight from the type isn't going to work. 
+: This shows up in the standard library, like in the json encoder from earlier... 
+
+* Don't expose the required fields
+
+.image init-struct-values/os_file_type.png _ 1000
+
+.link https://golang.org/pkg/os/#File
+
+: ...and in the os package's File type.
+: It's a pretty safe bet to follow the patterns in the standard library, so this is a good solution too.
+: It doesn't guarantee that the package consumer will use the function to create a value, but it might be enough to save them from a little debugging.
+
+* Don't expose the type
+
+    type book struct {
+        Title   string
+        Content string
+    }
+
+    func NewBook(title, content string) *book {
+        // ...
+    }
+
+.image init-struct-values/book_private_type.png _ 1000
+
+: Now for a less-nice solution - making the book type unexported.
+: If we do this, the importer of the package will have to use the NewBook function, so we can make it clear which fields they must provide.
+: But there's a cost to this extra bit of safety - it makes the package's API less-nice.
+
+* Don't expose the type
+
+Not a nice API
+
+- golint says "exported func NewBook returns unexported type *bookstore.book, which can be annoying to use"
+- No documentation for `book`
+
+.image init-struct-values/book_private_type.png _ 1000
+
+: Why isn't this a nice API? Golint tells us - it's annoying.
+: Even though the value we get does partly work (the importer _is_ allowed to access the unexported type's exported fields), they won't be able to do much else with it.
+: Possibly worse, the documentation now has a dead-end since we can't click through to the Book type and see its fields.
+
+
+* Return an interface
+
+We _could_ make `Book` an interface
+
+    type Book interface {
+        Shelve() error
+        Read() (string, error)
+        Sell(c Customer) error 
+    }
+
+And return a value of the type that implements it
+
+    type book struct {
+        title   string
+        content string
+    }
+
+    func NewBook(title, content string) Book {
+        return &book{title: title, content: content}
+    }
+
+    // implementations of required methods... 
+
+: As a solution to this, we may be able to return an exported interface.
+: For example, if our Book can be represented as a reasonably-sized interface, we could return an interface value instead of a concrete, unexported value.
+: In this contrived example, Books can only be shelved, read, and sold, so the interface is small.
+: Now the book struct-type is unexported and has unexported fields. It also implements the methods required by the exposed Book interface, but they aren't visible in the slide.
+: This should be less annoying to someone using the package, and it avoids the gross unlinked type in Godoc.
+
+* Return an interface
+
+.image init-struct-values/book_interface.png _ 1000
+
+: And since NewBook returns a value that implements Book, Godoc even groups them together.
+
+* Return an interface
+There are downsides to returning an interface
+
+- Goes against "accept interfaces, return structs" guidance
+- Could encourage interfaces with many methods, which can reduce clarity and usefulness
+
+: It's not a perfect solution though. Following the "Accept interfaces, return structs" principle can help us avoid over-designing interfaces, and wasting time defining a bunch of methods we won't need. Returning an interface breaks half of that rule.
+
+* Return an interface
+I've found this useful when following the repository pattern
+
+   type CustomerRepo interface {
+        Find(name string) bookstore.Customer
+        Create(c bookstore.Customer) error
+        Delete(name string) error
+    }
+
+ 
+
+    package repo
+
+    type sqlCustomerRepo struct {
+        primary, replica *sql.DB
+    }
+
+    func New(primary, replica *sql.DB) CustomerRepo {
+        return &sqlCustomerRepo{
+            primary: primary,
+            replica: replica,
+        }
+    }
+
+    // implementations of required methods...
+
+: That said, I've found this useful when defining repository types. It's better to define interfaces where they are used, but I like the way this allows me to ensure that the repository has both a primary and read-only replica database backing it.
+: I could also have an argument for a logger, since I consistently forget to include one if it's just a struct field.
+
+* Mix of required and optional fields
+
+: Okay, let's take these different strategies and put them together.
+
+* Mix of required and optional fields
+We can combine the previous methods to make an API that clearly shows what is
+optional and what is required.
+
+Given the `Book` interface defined previously
+
+    type Book interface {
+        Shelve() error
+        Read() (string, error)
+        Sell(c Customer) error 
+    }
+
+: Let's keep using the Book interface, and say a book must have a title and content, but add that it may also have an author and publishDate.
+
+* Mix of required and optional fields
+We can add new fields to the `book` struct type:
+
+   type book struct {
+        title       string
+        content     string
+        author      string
+        publishDate time.Time
+    }
+
+    // implementations of required methods...
+
+: We can add author and publish date fields to our unexported book type.
+
+* Mix of required and optional fields
+
+And create a public struct type that exposes fields for the optional parameters
+
+    type BookOptions struct {
+        Author      string
+        PublishDate time.Time
+    }
+
+Then accept a value of that type in our New function
+
+    func NewBook(title, content string, opts BookOptions) Book {
+        return &book{
+            title:       title,
+            content:     content,
+            author:      opts.Author,
+            publishDate: opts.PublishDate,
+        }
+    }
+
+: And add a BookOptions argument to NewBook. This type is exported, and has exported fields for the optional values that can be provided when initializing a book.
+: The package importer is free to set the author and publish date when they create the book, or pass an empty BookOptions value if they don't need them.
+: It's clear from the function arguments that a title and content are required to create a Book. And the BookOptions type suggests that its fields are optional, since code that doesn't set them will still compile.
+
+* Mix of required and optional fields
+
+.image init-struct-values/book_mixed_config.png _ 1000
+
+: And all of this shows up very clearly in Godoc.
+
+
+* Conclusion
+: That was an overview of some different ways you might try to guide consumers of a package into initializing a value correctly.
+: I'm not here to tell you which ones you should use, but to encourage you to consider how they can effect the experience of someone using your package.
+
+* Conclusion
+Use function arguments for required parameters, and struct fields for optional ones.
+
+: A simple principle that sums this up is "Use function arguments for required parameters, and struct fields for optional ones." When circumstances allow, packages that follow this rule can provide users with a smooth experience and a minimum of misconfigured values. 
+
+* Questions?
+
+: Thank you very much for your time and for letting me talk about this. I might be able to answer a few questions, or feel free to ask me in the Gopher Slack, where my username is Lars.
+
+: Thanks again, have a good night.
